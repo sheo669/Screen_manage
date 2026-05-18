@@ -183,6 +183,16 @@ class App:
             self.cap.release()
 
         cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1920)
+
+        ret, frame = cap.read()
+        if ret:
+            print("Camera frame shape:", frame.shape)
+
+
         if not cap.isOpened():
             self._set_status(f"Не удалось открыть Camera {index}")
             messagebox.showerror("Ошибка", f"Не удалось открыть Camera {index}")
