@@ -29,6 +29,19 @@ INTERVALS = {
     "4 часа":     14400,
 }
 
+RESOLUTIONS = {
+    "640x480 (VGA)": (480, 640),
+    "800x600 (SVGA)": (600, 800),
+    "1280x720 (HD)": (720, 1280),
+    "1600x900": (900, 1600),
+    "1920x1080 (Full HD)": (1080, 1920),
+    "2560x1440 (2K)": (1140, 2560),
+}
+
+
+JPEG_QUALITIES = ["70", "80", "85", "90", "95", "100"]
+
+
 PREVIEW_W = 640
 PREVIEW_H = 480
 PREVIEW_FPS_MS = 33  # ~30 fps preview refresh
@@ -74,6 +87,8 @@ class App:
         # ── Top control panel ──
         ctrl = tk.Frame(self.root, padx=PAD, pady=PAD)
         ctrl.pack(side=tk.TOP, fill=tk.X)
+        ctrl.grid_columnconfigure(4, weight=1)
+
 
         # Camera row
         tk.Label(ctrl, text="Камера:").grid(row=0, column=0, sticky="w", padx=(0, 4))
@@ -101,13 +116,41 @@ class App:
         self.btn_start = tk.Button(ctrl, text="▶ Start", width=10,
                                    bg="#2ecc71", fg="white",
                                    command=self.start_capture)
-        self.btn_start.grid(row=0, column=3, padx=(16, 4), rowspan=1)
+        self.btn_start.grid(row=0, column=5, padx=(16, 0), sticky="e")
 
         self.btn_stop = tk.Button(ctrl, text="■ Stop", width=10,
                                   bg="#e74c3c", fg="white",
                                   command=self.stop_capture,
                                   state=tk.DISABLED)
-        self.btn_stop.grid(row=1, column=3, padx=(16, 4), pady=(6, 0))
+        self.btn_stop.grid(row=1, column=5, padx=(16, 0), pady=(6, 0), sticky="e")
+
+
+
+
+        # Resolution row
+        tk.Label(ctrl, text="Разрешение:").grid(row=1, column=2, sticky="w", padx=(12, 4), pady=(6, 0))
+        self.resolution_var = tk.StringVar(value="1280x720 (HD)")
+        self.resolution_combo = ttk.Combobox(
+            ctrl,
+            textvariable=self.resolution_var,
+            values=list(RESOLUTIONS.keys()),
+            state="readonly",
+            width=20
+        )
+        self.resolution_combo.grid(row=1, column=3, sticky="w", pady=(6, 0))
+        self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_selected)
+
+        # Quality row
+        tk.Label(ctrl, text="JPEG quality:").grid(row=2, column=2, sticky="w", padx=(12, 4), pady=(6, 0))
+        self.quality_var = tk.StringVar(value="95")
+        self.quality_combo = ttk.Combobox(
+            ctrl,
+            textvariable=self.quality_var,
+            values=JPEG_QUALITIES,
+            state="readonly",
+            width=20
+        )
+        self.quality_combo.grid(row=2, column=3, sticky="w", pady=(6, 0))
 
         # Save folder path
         tk.Label(ctrl, text="Папка:").grid(row=2, column=0, sticky="w",
@@ -117,6 +160,27 @@ class App:
                  anchor="w", width=52, relief="sunken",
                  font=("Consolas", 8)).grid(row=2, column=1, columnspan=3,
                                              sticky="w", pady=(6, 0))
+        
+
+        def apply_resolution(self):
+            if not self.cap or not self.cap.isOpened():
+                return
+
+            resolution_name = self.resolution_var.get()
+            width, height = RESOLUTIONS[resolution_name]
+
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+            actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            self._set_status(
+                f"Выбрано: {resolution_name}. Фактически: {actual_w}x{actual_h}"
+            )
+
+
 
         # Counter
         self.counter_var = tk.StringVar(value="Снимков: 0")
@@ -174,33 +238,60 @@ class App:
     # ── Camera open / close ────────────────────
 
     def open_camera(self, index: int):
-        """Open a camera by index, start preview."""
+        """Open selected camera and apply requested resolution."""
         if self._current_cam_index == index and self.cap and self.cap.isOpened():
             return
 
         self._stop_preview()
+
         if self.cap:
             self.cap.release()
+            self.cap = None
 
         cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1920)
-
-        ret, frame = cap.read()
-        if ret:
-            print("Camera frame shape:", frame.shape)
-
-
         if not cap.isOpened():
             self._set_status(f"Не удалось открыть Camera {index}")
             messagebox.showerror("Ошибка", f"Не удалось открыть Camera {index}")
             return
 
+        # Пытаемся включить MJPG для лучшего разрешения/пропускной способности
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+
+        # Берём выбранное разрешение из combobox
+        resolution_name = self.resolution_var.get()
+        width, height = RESOLUTIONS.get(resolution_name, (1280, 720))
+
+        # Запрашиваем нужный режим камеры
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+        # Можно дополнительно попробовать fps
+        cap.set(cv2.CAP_PROP_FPS, 30)
+
+        # Читаем фактические значения, которые реально приняла камера
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # Проверка чтения первого кадра
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            cap.release()
+            self._set_status(f"Camera {index} открыта, но кадр получить не удалось")
+            messagebox.showerror(
+                "Ошибка",
+                f"Camera {index} открыта, но не удалось получить кадр."
+            )
+            return
+
         self.cap = cap
         self._current_cam_index = index
-        self._set_status(f"Camera {index} активна")
+        self._current_frame = frame
+
+        self._set_status(
+            f"Camera {index} активна | Запрошено: {width}x{height} | "
+            f"Фактически: {actual_w}x{actual_h}"
+        )
+
         self._start_preview()
 
     def _on_cam_selected(self, _event=None):
@@ -296,6 +387,16 @@ class App:
             interval_sec * 1000, self._capture_tick
         )
 
+
+    def _on_resolution_selected(self, _event=None):
+        if self.running:
+            messagebox.showinfo("Информация", "Сначала остановите съёмку.")
+            return
+
+        if self.cam_var.get():
+            idx = int(self.cam_var.get().split()[-1])
+            self.open_camera(idx)
+
     def _capture_tick(self):
         """Called by after() at each interval to save a screenshot."""
         if not self.running:
@@ -328,18 +429,30 @@ class App:
     def save_screenshot(self):
         if self._current_frame is None:
             return
+
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filename = f"shot_{ts}.jpg"
         filepath = os.path.join(self.save_folder, filename)
+
+        jpeg_quality = int(self.quality_var.get())
+
         try:
-            cv2.imwrite(filepath, self._current_frame)
+            ok = cv2.imwrite(
+                filepath,
+                self._current_frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            )
+            if not ok:
+                raise IOError("cv2.imwrite вернул False")
+
             self.shot_count += 1
             self.counter_var.set(f"Снимков: {self.shot_count}")
             self._set_status(
-                f"Сохранён: {filename}  (всего: {self.shot_count})"
+                f"Сохранён: {filename} | quality={jpeg_quality} | всего: {self.shot_count}"
             )
         except Exception as e:
             self._set_status(f"Ошибка сохранения: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\\n{e}")
 
     # ── Cleanup ────────────────────────────────
 
